@@ -37,7 +37,7 @@ fw="bootloader/uboot-repo/fip"
 ddr="bootloader/uboot-repo/fip/tools/ddr_parse"
 # blx/tools/fw
 BIN_LIST="$bl2/$SOCFAMILY/bl2.bin \
-	  $bl30/$SOCFAMILY/bl30.bin \
+          $bl30/$SOCFAMILY/bl30.bin \
 	  $bl31/$SOCFAMILY/bl31.bin \
 	  $bl31/$SOCFAMILY/bl31.img \
 	  $fw/$SOCFAMILY/aml_encrypt_$SOCFAMILY \
@@ -51,12 +51,30 @@ get_src () {
     local GITBRANCH="master"
     git clone -n --depth=1 --filter=tree:0 https://github.com/BPI-SINOVOIP/BPI-S905X3-Android9.git -b $GITBRANCH $TMP_GIT/FIP
     (
-    cd $TMP_GIT/FIP
-    git sparse-checkout set --no-cone /$bl2/$SOCFAMILY /$bl30/$SOCFAMILY /$bl31/$SOCFAMILY /$fw/$SOCFAMILY /$ddr
-    git checkout
+        cd $TMP_GIT/FIP
+        git sparse-checkout set --no-cone /$bl2/$SOCFAMILY /$bl30/$SOCFAMILY /$bl31/$SOCFAMILY /$fw/$SOCFAMILY /$ddr
+        git checkout
     )
 }
 get_src "$@"
+# get bl30.bin for M5
+# M5: Use old BPI-S905X3 master branch to checkout bl30.bin, as the new blob leads to "Undefined instructions" crash
+# commit a538717a004e5a99927a755db5f5643c31caf6ce (origin/master, origin/HEAD)
+get_bl30 () {
+    local GITBRANCH="master"
+    git clone -n --depth=1 --filter=tree:0 https://github.com/BPI-SINOVOIP/BPI-S905X3-Android9.git -b $GITBRANCH $TMP_GIT/bl30
+    (
+        cd $TMP_GIT/bl30
+        local commit="a538717a004e5a99927a755db5f5643c31caf6ce"
+        git sparse-checkout set --no-cone /$bl30/$SOCFAMILY
+        git config --global advice.detachedHead false && git checkout $commit
+    )
+}
+if [[ "$REFBOARD" == "sm1_bananapim5_v1" ]]
+then
+    get_bl30 "$@"
+    cp $TMP_GIT/bl30/$bl30/$SOCFAMILY/* $TMP/
+fi
 # U-Boot
 git clone --depth=2 https://github.com/bumerc77/deadpool_u-boot.git -b $GITBRANCH $TMP_GIT/u-boot
 mkdir -p $TMP_GIT/u-boot/fip/tools
@@ -78,6 +96,11 @@ cp $TMP_GIT/u-boot/build/scp_task/bl301.bin $TMP/
 #cp $TMP_GIT/u-boot/fip/tools/ddr_parse/parse $TMP
 #$TMP_GIT/u-boot/fip/tools/ddr_parse/parse $TMP/acs.bin
 # FIP/BLX
+if [[ "$REFBOARD" == "sm1_bananapim5_v1" ]]
+then
+    MOD_LIST="${BIN_LIST//"$bl30/$SOCFAMILY/bl30.bin"/}"
+    BIN_LIST="$MOD_LIST"
+fi
 echo $BIN_LIST
 for item in $BIN_LIST
 do
@@ -88,6 +111,12 @@ done
 mv $TMP_GIT/FIP/$fw/$SOCFAMILY/aml_encrypt_$SOCFAMILY $TMP/aml_encrypt
 date > $TMP/info.txt
 echo "BRANCH: $GITBRANCH ($(date +%Y%m%d))" >> $TMP/info.txt
+# extract bl30-info
+if [[ "$REFBOARD" == "sm1_bananapim5_v1" ]]
+then
+    dd if=$TMP_GIT/bl30/$bl30/$SOCFAMILY/bl30.bin of=$TMP_GIT/bl30_info.bin bs=$((0x1)) count=$((0x44)) skip=$((0x77b4))
+    echo "bl30: $(< "$TMP_GIT/bl30_info.bin")" >> $TMP/info.txt
+fi
 for component in $TMP_GIT/*
 do
     if [[ -d $component/.git ]]
@@ -99,13 +128,12 @@ done
 # use bl30.bin from Khadas as the BPI ne is having a undefined instruction crash
 # wget -O $TMP/bl30.bin https://github.com/khadas/android_u-boot/blob/a476c78191f7642aa387ddbdb7296a0158028692/bl30/bin/g12a/bl30.bin?raw=true
 # extract ddr fw-info
-dd if=$TMP_GIT/FIP/$fw/$SOCFAMILY/aml_ddr.fw of=$TMP_GIT/fw_version.bin bs=$((0x1)) count=$((0x13)) skip=$((0xb225))
-dd if=$TMP_GIT/FIP/$fw/$SOCFAMILY/aml_ddr.fw of=$TMP_GIT/fw_built.bin bs=$((0x1)) count=$((0x46)) skip=$((0xad78))
-sed -i 's/ :/:/' $TMP_GIT/fw_built.bin | echo "DDR-FIRMWARE: $(< "$TMP_GIT/fw_version.bin")" >> $TMP/info.txt
-echo "$(< "$TMP_GIT/fw_built.bin")" >> $TMP/info.txt
-
 if [[ "$REFBOARD" == "sm1_bananapim5_v1" ]]
 then
+    dd if=$TMP_GIT/FIP/$fw/$SOCFAMILY/aml_ddr.fw of=$TMP_GIT/fw_version.bin bs=$((0x1)) count=$((0x13)) skip=$((0xb225))
+    dd if=$TMP_GIT/FIP/$fw/$SOCFAMILY/aml_ddr.fw of=$TMP_GIT/fw_built.bin bs=$((0x1)) count=$((0x46)) skip=$((0xad78))
+    sed -i 's/ :/:/' $TMP_GIT/fw_built.bin | echo "DDR-FIRMWARE: $(< "$TMP_GIT/fw_version.bin")" >> $TMP/info.txt
+    echo "$(< "$TMP_GIT/fw_built.bin")" >> $TMP/info.txt
     SOCFAMILY="sm1"
 fi
 echo "SOC: $SOCFAMILY" >> $TMP/info.txt
